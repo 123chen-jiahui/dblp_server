@@ -5,10 +5,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var port = flag.String("p", "", "运行端口")
@@ -33,15 +35,25 @@ func GetAllFiles(dirPth string) (files []string, err error) {
 	return files, nil
 }
 
-func searchName(name string, start, end int) map[string]int {
+// 目前为止，发现有两种格式：
+// 1
+// <www mdate="2012-01-04" key="homepages/28/10695">
+// <author>...</author>
+// <author>...</author>
+// <title> ...</title>
+// </www>
+// 2
+// 常规的
+func searchName(name string, start, end int) (map[string]int, []Info) {
 	m := make(map[string]int)
 	name = "<author>" + name + "</author>"
 	files, err := GetAllFiles("storage")
 	if err != nil {
 		fmt.Printf("获取xml文件失败，错误原因：%v", err)
-		return nil
+		return nil, nil
 	}
 
+	var cacheInfoEntries []Info
 	// 遍历每个chunk
 	for _, f := range files {
 		file, err := os.Open(f)
@@ -60,29 +72,42 @@ func searchName(name string, start, end int) map[string]int {
 		file.Close()
 		m[f] = 0
 
-		if start == 0 && end == 0 { // 不对时间设限制
-			m[f] = strings.Count(string(data[:n]), name)
-		} else {
-			// 定位名字
-			s := string(data[:n])
-			for {
-				indexName := strings.Index(s, name)
-				if indexName == -1 {
-					break
-				}
-				s = s[indexName:]
-				// 定位<year>...</year>
-				indexYear := strings.Index(s, "<year>")
-				s = s[indexYear+6:]
-				year, _ := strconv.Atoi(strings.Split(s, "<")[0])
-				if year >= start && year <= end {
-					m[f] += 1
-				}
+		// if start == 0 && end == 0 { // 不对时间设限制
+		// 	m[f] = strings.Count(string(data[:n]), name)
+		// } else {
+		// 定位名字
+		s := string(data[:n])
+		for {
+			indexName := strings.Index(s, name)
+			if indexName == -1 {
+				break
+			}
+			sReverse := s[:indexName] // 用于反向查找
+			s = s[indexName:]
+			// 定位<year>...</year>
+			indexYear := strings.Index(s, "<year>")
+			s = s[indexYear+6:]
+			year, _ := strconv.Atoi(strings.Split(s, "<")[0])
+			if year == 0 { // 通过这种方法没有正确找到year
+				wwwIndex := strings.LastIndex(sReverse, "<www mdate=\"")
+				s2 := sReverse[wwwIndex+12:]
+				year, _ = strconv.Atoi(strings.Split(s2[:10], "-")[0])
+				log.Println(year)
+			}
+			cacheInfoEntries = append(cacheInfoEntries, Info{
+				Year:     year,
+				Number:   1,
+				Chunk:    f,
+				Location: indexName,
+			})
+			if (start == 0 && end == 0) || (year >= start && year <= end) {
+				m[f] += 1
 			}
 		}
+		// }
 	}
 	fmt.Println(m)
-	return m
+	return m, cacheInfoEntries
 }
 
 func serve(conn net.Conn) {
@@ -120,7 +145,13 @@ func serve(conn net.Conn) {
 			end, _ := strconv.Atoi(params[3])
 			fmt.Println(start, end)
 
-			m := searchName(author, start, end)
+			// 先查缓存
+			exist, m := lookCaches(author, start, end)
+			if !exist { // 缓存查询失败
+				var cacheInfoEntries []Info
+				m, cacheInfoEntries = searchName(author, start, end)
+				appendCache(author, cacheInfoEntries)
+			}
 			// m := searchName(msg[2:])
 			fmt.Println(len(m))
 			res, _ := json.Marshal(m)
@@ -133,7 +164,34 @@ func serve(conn net.Conn) {
 	}
 }
 
+func init() {
+	file, err := os.OpenFile("./cache.json", os.O_RDWR|os.O_CREATE, 0755)
+	if err != nil {
+		log.Printf("打开/创建cache.json失败：%v", err)
+		return
+	}
+	defer file.Close()
+	decoder := json.NewDecoder(file)
+	err = decoder.Decode(&Caches)
+	if err != nil {
+		log.Println("反序列化cache.json失败", err)
+		// return
+	}
+	for i, item := range Caches {
+		Directory[item.Author] = i
+	}
+	fmt.Println("cache中的内容为：")
+	fmt.Println(Caches)
+}
+
 func main() {
+	// 定时持久化Caches
+	go func() {
+		for {
+			time.Sleep(time.Second * 10)
+			saveCache()
+		}
+	}()
 	flag.Parse()
 	if *port == "" {
 		flag.Usage()
