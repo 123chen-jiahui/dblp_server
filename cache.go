@@ -27,7 +27,7 @@ var Directory = make(map[string]int) // 用于快速查找Cache
 var Term int                         // 用于判断Caches是否有更新
 var CachesMutex sync.Mutex
 
-// bool标识缓存是否存在，map标识结果
+// bool表示缓存是否存在，map表示结果
 // 只有bool为true，map才有意义
 func lookCaches(author string, start, end int) (bool, map[string]int) {
 	CachesMutex.Lock()
@@ -39,14 +39,23 @@ func lookCaches(author string, start, end int) (bool, map[string]int) {
 	cache := Caches[index] // 获取缓存
 
 	fmt.Println(cache)
-	var all bool
+	var all bool // client是否是要获取全部信息
 	m := make(map[string]int)
 	if start == 0 && end == 0 {
 		all = true
 	}
 	for _, item := range cache.Infos {
-		if all || (item.Year >= start && item.Year <= end) {
+		if item.Year == -1 { // 这是一条空信息
+			m[item.Chunk] = 0
+		} else if all || (item.Year >= start && item.Year <= end) {
 			m[item.Chunk] += 1
+		} else {
+			// fmt.Println(item.Chunk)
+			if _, ok = m[item.Chunk]; ok {
+				continue
+			}
+			log.Println(item.Chunk)
+			m[item.Chunk] = 0
 		}
 	}
 	return true, m
@@ -80,9 +89,13 @@ func appendCache(author string, infos []Info) {
 }
 
 // 持久化cache
-func saveCache() {
+func saveCache(term *int) {
 	CachesMutex.Lock()
 	defer CachesMutex.Unlock()
+	if Term <= *term {
+		return
+	}
+	*term = Term
 	log.Println("持久化cache")
 	file, err := os.OpenFile("./cache.json", os.O_WRONLY|os.O_TRUNC, 0755)
 	if err != nil {

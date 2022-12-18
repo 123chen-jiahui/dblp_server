@@ -77,10 +77,22 @@ func searchName(name string, start, end int) (map[string]int, []Info) {
 		// } else {
 		// 定位名字
 		s := string(data[:n])
+		var find bool // 在该chunk中，可曾找到过目标
 		for {
 			indexName := strings.Index(s, name)
 			if indexName == -1 {
+				if !find { // 加入一条没有数量的信息。这么做仅仅是为了client方便判断是否全部找到
+					cacheInfoEntries = append(cacheInfoEntries, Info{
+						Year:     -1,
+						Number:   0,
+						Chunk:    f,
+						Location: -1,
+					})
+				}
 				break
+			}
+			if !find {
+				find = true
 			}
 			sReverse := s[:indexName] // 用于反向查找
 			s = s[indexName:]
@@ -187,9 +199,11 @@ func init() {
 func main() {
 	// 定时持久化Caches
 	go func() {
+		term := -1
 		for {
+			log.Println("term is ", term)
 			time.Sleep(time.Second * 10)
-			saveCache()
+			saveCache(&term)
 		}
 	}()
 	flag.Parse()
