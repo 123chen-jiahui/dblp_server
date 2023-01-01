@@ -13,7 +13,9 @@ import (
 	"time"
 )
 
-var port = flag.String("p", "", "运行端口")
+var port = flag.String("p", "", "运行端口（tcp）")
+var udpPort = flag.String("u", "", "运行端口（udp）")
+var referrerPort = flag.String("r", "", "引荐人运行端口（udp）")
 
 func GetAllFiles(dirPth string) (files []string, err error) {
 	dir, err := os.ReadDir(dirPth)
@@ -131,6 +133,12 @@ func serve(conn net.Conn) {
 		// 查日志消息格式
 		// flag=1;key
 
+		// 主动离开
+		// flag=2;ip;port
+
+		// fail
+		// flag=3;ip;port
+
 		data := make([]byte, 2048)
 		n, err := conn.Read(data)
 		if err != nil {
@@ -170,6 +178,12 @@ func serve(conn net.Conn) {
 			conn.Write(res)
 		case "1": // 查日志
 			fmt.Println("查日志")
+		case "2": // 查看组成员列表
+			conn.Write(MemberListTobytes())
+		case "3": // 使组成员离开
+			addr := params[1]
+			des, _ := net.ResolveUDPAddr("udp", addr)
+			sendMessage([]byte("abcd"), des) // 实在不知道取什么名字了。。。
 		default:
 			fmt.Println("未知消息!")
 		}
@@ -177,6 +191,41 @@ func serve(conn net.Conn) {
 }
 
 func init() {
+	// 必须指定自己的tcp、udp运行端口以及引荐人端口
+	flag.Parse()
+	if *port == "" || *referrerPort == "" || *udpPort == "" {
+		flag.Usage()
+		os.Exit(-1)
+	}
+
+	// udp本地址和引荐人地址
+	portInt, _ := strconv.Atoi(*udpPort)
+	UdpAddr = &net.UDPAddr{
+		IP:   net.ParseIP("127.0.0.1"),
+		Port: portInt,
+	}
+	if *referrerPort == *udpPort {
+		isReferrer = true // 自己就是引荐人
+		RefAddr = &net.UDPAddr{
+			IP:   net.ParseIP("127.0.0.1"),
+			Port: portInt,
+		}
+		MemberList = append(MemberList, RefAddr.String())
+	} else {
+		portInt, _ = strconv.Atoi(*referrerPort)
+		RefAddr = &net.UDPAddr{
+			IP:   net.ParseIP("127.0.0.1"),
+			Port: portInt,
+		}
+	}
+
+	// 创建UDP监听句柄并监听
+	createUDPHandler()
+
+	// 初始化channel
+	HeartBeatChannel = make(chan bool, 0)
+	JoinChannel = make(chan bool, 0)
+
 	file, err := os.OpenFile("./cache.json", os.O_RDWR|os.O_CREATE, 0755)
 	if err != nil {
 		log.Printf("打开/创建cache.json失败：%v", err)
@@ -206,12 +255,49 @@ func main() {
 			saveCache(&term)
 		}
 	}()
-	flag.Parse()
-	if *port == "" {
-		flag.Usage()
-		return
+
+	go listen()
+	if !isReferrer {
+		go join()
 	}
+	go heartBeat()
+
+	// test udp
+	// portInt, _ := strconv.Atoi(*port)
+	// udpListener, err := net.ListenUDP("udp", &net.UDPAddr{
+	// 	IP:   net.IPv4(0, 0, 0, 0),
+	// 	Port: portInt,
+	// })
+	// if err != nil {
+	// 	log.Println("UDP监听出错：", err)
+	// 	return
+	// }
+	// defer udpListener.Close()
+	// if isReferrer {
+	// 	go func() {
+	// 		for {
+	// 			var data [1024]byte
+	// 			n, addr, err := udpListener.ReadFromUDP(data[:])
+	// 			if err != nil {
+	// 				log.Println("无法从UDP中读取：", err)
+	// 				continue
+	// 			}
+	// 			log.Printf("data:%v addr:%v count:%v\n", string(data[:n]), addr, n)
+	// 			_, err = udpListener.WriteToUDP(data[:n], addr) // 发送数据
+	// 			if err != nil {
+	// 				fmt.Println("Write to udp failed, err: ", err)
+	// 				continue
+	// 			}
+	// 		}
+	// 	}()
+	// } else {
+	// 	go func() {
+	//
+	// 	}()
+	// }
+
 	listener, err := net.Listen("tcp", ":"+*port)
+	fmt.Println("tcp端口号为：", *port)
 	if err != nil {
 		fmt.Println("启动socket失败!")
 		return
