@@ -184,6 +184,10 @@ func serve(conn net.Conn) {
 			addr := params[1]
 			des, _ := net.ResolveUDPAddr("udp", addr)
 			sendMessage([]byte("abcd"), des) // 实在不知道取什么名字了。。。
+		case "4":
+			addr := params[1]
+			des, _ := net.ResolveUDPAddr("udp", addr)
+			sendMessage([]byte("wake"), des)
 		default:
 			fmt.Println("未知消息!")
 		}

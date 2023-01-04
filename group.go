@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"net"
 	"strings"
@@ -134,6 +133,9 @@ func leave() {
 	msg := "left " + UdpAddr.String() + " " + strings.Join(members, " ")
 	data := []byte(msg)
 	des := findNextAddr()
+	MemberList = []string{UdpAddr.String()}
+	// close(HeartBeatChannel)
+	// close(JoinChannel)
 	mu.Unlock()
 	sendMessage(data, des)
 }
@@ -194,7 +196,7 @@ func heartBeat() {
 			default:
 				// 若没有在规定时间内收到心跳检查，则视为失败，则将des从MemberList中删除
 				if time.Since(t).Milliseconds() > 200 {
-					log.Println("心跳检查失败")
+					log.Printf("[%s] 心跳检查失败 %s\n", UdpAddr.String(), des.String())
 					mu.Lock()
 					index := -1
 					for i, v := range MemberList {
@@ -206,7 +208,7 @@ func heartBeat() {
 					if index != -1 {
 						MemberList = append(MemberList[:index], MemberList[index+1:]...)
 					}
-					log.Println("更新后组成员为：", MemberList)
+					log.Printf("[%s] 组成员列表为 %v\n", UdpAddr.String(), MemberList)
 					mu.Unlock()
 
 					go fail(des.String())
@@ -218,7 +220,6 @@ func heartBeat() {
 }
 
 func sendMessage(data []byte, des *net.UDPAddr) {
-	fmt.Println("nani", UdpAddr, des)
 	socket, err := net.DialUDP("udp", nil, des)
 	if err != nil {
 		log.Println("连接UDP失败， err：", err, des)
@@ -245,7 +246,7 @@ func listen() {
 		}
 
 		msg := string(data[:n])
-		fmt.Println("得到的信息是", msg)
+		// fmt.Println("得到的信息是", msg)
 		switch msg[:4] {
 		case "join":
 			// 添加组成员
@@ -261,12 +262,11 @@ func listen() {
 
 			go add()
 		case "ping": // 收到别人的心跳检查
-			log.Println("收到心跳检查了")
-
+			// log.Println("收到心跳检查了")
 			des, _ := net.ResolveUDPAddr("udp", msg[5:])
 			UDPListener.WriteToUDP([]byte("pong"), des)
 		case "pong": // 收到别人对心跳检查的相应
-			log.Println("收到心跳检查相应了")
+			// log.Println("收到心跳检查相应了")
 			HeartBeatChannel <- true
 		case "addd":
 			if isReferrer {
@@ -276,8 +276,8 @@ func listen() {
 			members := strings.Split(msg[5:], " ")
 			mu.Lock()
 			MemberList = members
-			log.Println("加入新节点：", members[len(members)-1])
-			log.Println("新增后组成员列表为：", MemberList)
+			log.Printf("[%s] 加入新节点 %v\n", UdpAddr.String(), members[len(members)-1])
+			log.Printf("[%s] 组成员列表为 %v\n", UdpAddr.String(), MemberList)
 			mu.Unlock()
 
 			// 传递这一条消息
@@ -288,9 +288,10 @@ func listen() {
 				continue
 			}
 
-			log.Println("有节点失败：", addrs[1])
+			log.Printf("[%s] 有节点失败 %s\n", UdpAddr.String(), addrs[1])
 			mu.Lock()
 			MemberList = addrs[2:]
+			log.Printf("[%s] 组成员列表为 %v\n", UdpAddr.String(), MemberList)
 			mu.Unlock()
 
 			// 转发消息
@@ -298,9 +299,10 @@ func listen() {
 		case "left":
 			addrs := strings.Split(msg[5:], " ")
 
-			log.Println("有节点主动退出：", addrs[0])
+			log.Printf("[%s] 有节点主动退出 %s\n", UdpAddr.String(), addrs[0])
 			mu.Lock()
 			MemberList = addrs[1:]
+			log.Printf("[%s] 组成员列表为 %v\n", UdpAddr.String(), MemberList)
 			mu.Unlock()
 
 			go realLeave(addrs[0])
@@ -310,9 +312,10 @@ func listen() {
 				continue
 			}
 
-			log.Println("有节点主动退出：", addrs[1])
+			log.Printf("[%s] 有节点主动退出 %s\n", UdpAddr.String(), addrs[1])
 			mu.Lock()
 			MemberList = addrs[2:]
+			log.Printf("[%s] 组成员列表为 %v\n", UdpAddr.String(), MemberList)
 			mu.Unlock()
 
 			go transmit(data[:n])
@@ -320,6 +323,9 @@ func listen() {
 			JoinChannel <- true
 		case "abcd":
 			leave()
+		case "wake":
+			go join()
+
 		}
 		// _, err = UDPListener.WriteToUDP(data[:n], addr) // 发送数据
 		// if err != nil {
